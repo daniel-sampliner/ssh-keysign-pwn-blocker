@@ -26,6 +26,7 @@ pub fn main() !void {
         cmd.stdout_behavior = .Ignore;
         cmd.stderr_behavior = .Ignore;
         try cmd.spawn();
+        try cmd.waitForSpawn();
 
         const pidfd = pidfd_open(cmd.id, 0) catch continue;
         defer std.posix.close(pidfd);
