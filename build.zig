@@ -92,7 +92,9 @@ pub fn build(b: *std.Build) void {
             const dep_options = .{ .target = target, .optimize = optimize };
 
             loader.root_module.linkSystemLibrary("libbpf", .{ .preferred_link_mode = link_mode });
-            loader.root_module.linkSystemLibrary("libelf", .{ .preferred_link_mode = link_mode });
+
+            if (b.lazyDependency("elfutils", dep_options)) |elfutils_dep|
+                loader.root_module.linkLibrary(elfutils_dep.artifact("elf"));
 
             if (b.lazyDependency("zlib", dep_options)) |zlib_dep|
                 loader.root_module.linkLibrary(zlib_dep.artifact("z"));
