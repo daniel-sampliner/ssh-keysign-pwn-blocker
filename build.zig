@@ -4,109 +4,43 @@
 
 const std = @import("std");
 
+const fake_path: std.Build.LazyPath = .{ .cwd_relative = "/homeless-shelter" };
+
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
-    const bpf_target = b.resolveTargetQuery(.{
-        .cpu_arch = switch (target.result.cpu.arch.endian()) {
-            .big => .bpfeb,
-            .little => .bpfel,
-        },
-        .os_tag = .freestanding,
-    });
-
     const optimize = b.standardOptimizeOption(.{ .preferred_optimize_mode = .ReleaseFast });
 
     const install_all = b.option(bool, "install-all", "Install all build artifacts") orelse false;
-
-    const include_dirs = b.option([]const std.Build.LazyPath, "include-dir", "Add directory to include search path") orelse blk: {
-        const lps = [_]std.Build.LazyPath{
-            .{ .cwd_relative = b.fmt("/usr/src/kernels/{s}", .{std.posix.uname().release}) },
-        };
-        break :blk &lps;
-    };
-
-    const system_include_dirs = b.option([]const std.Build.LazyPath, "system-include-dir", "Add directory to SYSTEM include search path") orelse blk: {
-        const lps = [_]std.Build.LazyPath{
-            .{ .cwd_relative = "/usr/include" },
-        };
-        break :blk &lps;
-    };
-
-    const bpf_object = b.addObject(.{
-        .name = "ptrace_no_mm",
-        .root_module = b.createModule(.{
-            .target = bpf_target,
-            .optimize = .ReleaseFast,
-            .unwind_tables = .none,
-            .strip = false,
-        }),
-    });
-    bpf_object.root_module.addCSourceFile(.{ .file = b.path("src/ptrace_no_mm.bpf.c") });
-    for (include_dirs) |dir| {
-        bpf_object.root_module.addIncludePath(dir);
-    }
-    for (system_include_dirs) |dir| {
-        bpf_object.root_module.addSystemIncludePath(dir);
-    }
-    if (install_all)
-        b.getInstallStep().dependOn(&b.addInstallArtifact(bpf_object, .{ .dest_dir = .{ .override = .bin } }).step);
-
-    const bpftool = b.findProgram(&.{"bpftool"}, &.{}) catch |err| switch (err) {
-        error.FileNotFound => {
-            b.getInstallStep().dependOn(&b.addFail("bpftool binary not found in PATH").step);
-            return;
-        },
-    };
-
-    const run_bpftool_gen_skeleton = b.addSystemCommand(&.{
-        bpftool,
-        "gen",
-        "skeleton",
-    });
-    run_bpftool_gen_skeleton.addArtifactArg(bpf_object);
-
-    b.h_dir = b.pathJoin(&.{ b.install_prefix, "usr/include" });
-    const bpf_object_header = run_bpftool_gen_skeleton.captureStdOut();
-    run_bpftool_gen_skeleton.captured_stdout.?.basename = "ptrace_no_mm.skel.h";
-    if (install_all)
-        b.getInstallStep().dependOn(&b.addInstallHeaderFile(bpf_object_header, "ptrace_no_mm.skel.h").step);
-
-    const loader = b.addExecutable(.{
-        .name = "ptrace_no_mm",
-        .root_module = b.createModule(.{
-            .target = target,
-            .optimize = optimize,
-            .link_libc = true,
-        }),
-    });
-    loader.root_module.addCSourceFile(.{ .file = b.path("src/loader.c") });
-    loader.root_module.addIncludePath(bpf_object_header.dirname());
-    for (system_include_dirs) |dir| {
-        loader.root_module.addSystemIncludePath(dir);
-    }
-
     const link_mode = b.option(std.builtin.LinkMode, "link-mode", "Preferred link mode for libraries") orelse .static;
+    const vmlinux_dir: std.Build.LazyPath = b.option(std.Build.LazyPath, "vmlinux-dir", "Directory containining vmlinux.h header") orelse
+        if (b.lazyDependency("bcc", .{})) |dep|
+            dep.path(b.pathJoin(&.{ "libbpf-tools", switch (target.result.cpu.arch) {
+                .x86_64 => "x86",
+                else => |arch| @tagName(arch),
+            } }))
+        else
+            fake_path;
 
-    switch (link_mode) {
-        .static => {
-            const dep_options = .{ .target = target, .optimize = optimize };
-
-            loader.root_module.linkSystemLibrary("libbpf", .{ .preferred_link_mode = link_mode });
-
-            if (b.lazyDependency("elfutils", dep_options)) |elfutils_dep|
-                loader.root_module.linkLibrary(elfutils_dep.artifact("elf"));
-
-            if (b.lazyDependency("zlib", dep_options)) |zlib_dep|
-                loader.root_module.linkLibrary(zlib_dep.artifact("z"));
+    const deps = .{
+        .lazy = .{
+            .libbpf = b.lazyDependency("libbpf", .{ .target = target, .optimize = optimize }),
         },
-        .dynamic => {
-            loader.root_module.linkSystemLibrary("libbpf", .{ .preferred_link_mode = link_mode });
-            loader.root_module.linkSystemLibrary("libelf", .{ .preferred_link_mode = link_mode });
-            loader.root_module.linkSystemLibrary("z", .{ .preferred_link_mode = link_mode });
-        },
-    }
+    };
 
-    b.installArtifact(loader);
+    const options = .{
+        .target = target,
+        .optimize = optimize,
+
+        .install_all = install_all,
+        .link_mode = link_mode,
+        .vmlinux_dir = vmlinux_dir,
+
+        .deps = deps,
+    };
+
+    const bpf = build_bpf_program(b, options);
+    const bpf_skeleton_header = generate_bpf_skeleton_header(b, bpf, options);
+    const loader = build_loader(b, bpf_skeleton_header, options);
 
     const run_step = b.step("run", "Run the app");
 
@@ -128,28 +62,122 @@ pub fn build(b: *std.Build) void {
     sudo_run_step.dependOn(&sudo_run_cmd.step);
     sudo_run_cmd.step.dependOn(b.getInstallStep());
 
-    const chage_pwn_options = b.addOptions();
-    const chage_pwn_attempts = b.option(usize, "chage-pwn-attempts", "Number of times to attempt chage exploit") orelse 500;
-    const chage_pwn_user = b.option([]const u8, "chage-pwn-user", "User to run 'chage --list' against") orelse "root";
-    chage_pwn_options.addOption(usize, "attempts", chage_pwn_attempts);
-    chage_pwn_options.addOption([]const u8, "user", chage_pwn_user);
+    build_exploit(b, options);
+}
 
-    const chage_pwn = b.addExecutable(.{
+fn build_bpf_program(b: *std.Build, options: anytype) *std.Build.Step.Compile {
+    const target = b.resolveTargetQuery(.{
+        .cpu_arch = switch (options.target.result.cpu.arch.endian()) {
+            .big => .bpfeb,
+            .little => .bpfel,
+        },
+        .os_tag = .freestanding,
+    });
+
+    const obj = b.addObject(.{
+        .name = "ptrace_no_mm",
+        .root_module = b.createModule(.{
+            .target = target,
+            .optimize = .ReleaseFast,
+            .unwind_tables = .none,
+            .strip = false,
+        }),
+    });
+    obj.root_module.addCSourceFile(.{ .file = b.path("src/ptrace_no_mm.bpf.c") });
+    obj.root_module.addIncludePath(options.vmlinux_dir);
+
+    switch (options.link_mode) {
+        .static => if (options.deps.lazy.libbpf) |dep|
+            obj.root_module.include_dirs.append(
+                b.allocator,
+                .{ .other_step = dep.artifact("bpf") },
+            ) catch @panic("OOM"),
+        .dynamic => obj.root_module.addSystemIncludePath(.{ .cwd_relative = "/usr/include" }),
+    }
+
+    if (options.install_all)
+        b.getInstallStep().dependOn(&b.addInstallArtifact(
+            obj,
+            .{ .dest_dir = .{ .override = .bin } },
+        ).step);
+
+    return obj;
+}
+
+fn generate_bpf_skeleton_header(b: *std.Build, bpf_program: *std.Build.Step.Compile, options: anytype) std.Build.LazyPath {
+    const bpftool = b.findProgram(&.{"bpftool"}, &.{}) catch |err| switch (err) {
+        error.FileNotFound => {
+            b.getInstallStep().dependOn(&b.addFail("bpftool binary not found in PATH").step);
+            return fake_path;
+        },
+    };
+
+    const cmd = b.addSystemCommand(&.{
+        bpftool,
+        "gen",
+        "skeleton",
+    });
+    cmd.addArtifactArg(bpf_program);
+
+    const header = cmd.captureStdOut();
+    const name = "ptrace_no_mm.skel.h";
+    cmd.captured_stdout.?.basename = name;
+
+    if (options.install_all)
+        b.getInstallStep().dependOn(&b.addInstallHeaderFile(header, name).step);
+
+    return header;
+}
+
+fn build_loader(b: *std.Build, bpf_header: std.Build.LazyPath, options: anytype) *std.Build.Step.Compile {
+    const exe = b.addExecutable(.{
+        .name = "ptrace_no_mm",
+        .root_module = b.createModule(.{
+            .target = options.target,
+            .optimize = options.optimize,
+            .link_libc = true,
+        }),
+    });
+    b.installArtifact(exe);
+    exe.root_module.addCSourceFile(.{ .file = b.path("src/loader.c") });
+    bpf_header.addStepDependencies(&exe.step);
+    exe.root_module.addIncludePath(bpf_header.dirname());
+
+    switch (options.link_mode) {
+        .static => if (options.deps.lazy.libbpf) |dep|
+            exe.root_module.linkLibrary(dep.artifact("bpf")),
+        .dynamic => {
+            const args: std.Build.Module.LinkSystemLibraryOptions = .{ .preferred_link_mode = .dynamic };
+            exe.root_module.linkSystemLibrary("libbpf", args);
+        },
+    }
+
+    return exe;
+}
+
+fn build_exploit(b: *std.Build, options: anytype) void {
+    const exe_options = b.addOptions();
+    const attempts = b.option(usize, "exploit-attempts", "Number of times to attempt chage exploit") orelse 500;
+    const user = b.option([]const u8, "exploit-user", "User to run 'chage --list' against") orelse "root";
+    exe_options.addOption(usize, "attempts", attempts);
+    exe_options.addOption([]const u8, "user", user);
+
+    const exe = b.addExecutable(.{
         .name = "chage_pwn",
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/chage_pwn.zig"),
-            .target = target,
-            .optimize = optimize,
+            .target = options.target,
+            .optimize = options.optimize,
         }),
     });
-    chage_pwn.root_module.addOptions("config", chage_pwn_options);
+    exe.root_module.addOptions("config", exe_options);
 
-    const build_exploit_step = b.step("install-exploit", "Copy exploit build artifacts to prefix path");
-    const install_chage_pwn = b.addInstallArtifact(chage_pwn, .{});
-    build_exploit_step.dependOn(&install_chage_pwn.step);
-    if (install_all)
-        b.getInstallStep().dependOn(&install_chage_pwn.step);
+    const install_step = b.step("install-exploit", "Copy exploit build artifacts to prefix path");
+    const install_exe = b.addInstallArtifact(exe, .{});
+    install_step.dependOn(&install_exe.step);
+    if (options.install_all)
+        b.getInstallStep().dependOn(&install_exe.step);
 
     const run_exploit_step = b.step("run-exploit", "Run the exploit");
-    run_exploit_step.dependOn(&b.addRunArtifact(chage_pwn).step);
+    run_exploit_step.dependOn(&b.addRunArtifact(exe).step);
 }
