@@ -86,9 +86,23 @@ pub fn build(b: *std.Build) void {
     }
 
     const link_mode = b.option(std.builtin.LinkMode, "link-mode", "Preferred link mode for libraries") orelse .static;
-    loader.root_module.linkSystemLibrary("libbpf", .{ .preferred_link_mode = link_mode });
-    loader.root_module.linkSystemLibrary("libelf", .{ .preferred_link_mode = link_mode });
-    loader.root_module.linkSystemLibrary("z", .{ .preferred_link_mode = link_mode });
+
+    switch (link_mode) {
+        .static => {
+            const dep_options = .{ .target = target, .optimize = optimize };
+
+            loader.root_module.linkSystemLibrary("libbpf", .{ .preferred_link_mode = link_mode });
+            loader.root_module.linkSystemLibrary("libelf", .{ .preferred_link_mode = link_mode });
+
+            if (b.lazyDependency("zlib", dep_options)) |zlib_dep|
+                loader.root_module.linkLibrary(zlib_dep.artifact("z"));
+        },
+        .dynamic => {
+            loader.root_module.linkSystemLibrary("libbpf", .{ .preferred_link_mode = link_mode });
+            loader.root_module.linkSystemLibrary("libelf", .{ .preferred_link_mode = link_mode });
+            loader.root_module.linkSystemLibrary("z", .{ .preferred_link_mode = link_mode });
+        },
+    }
 
     b.installArtifact(loader);
 
