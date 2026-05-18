@@ -41,6 +41,7 @@ pub fn build(b: *std.Build) void {
     const bpf = build_bpf_program(b, options);
     const bpf_skeleton_header = generate_bpf_skeleton_header(b, bpf, options);
     const loader = build_loader(b, bpf_skeleton_header, options);
+    install_systemd(b);
 
     const run_step = b.step("run", "Run the app");
 
@@ -153,6 +154,47 @@ fn build_loader(b: *std.Build, bpf_header: std.Build.LazyPath, options: anytype)
     }
 
     return exe;
+}
+
+fn install_systemd(b: *std.Build) void {
+    const sed = b.findProgram(&.{"sed"}, &.{}) catch |err| switch (err) {
+        error.FileNotFound => {
+            b.getInstallStep().dependOn(&b.addFail("sed binary not found in PATH").step);
+            return;
+        },
+    };
+
+    const wc = b.addWriteFiles();
+
+    const dir = b.path("systemd");
+    const units: []const []const u8 = &.{"ptrace_no_mm.service"};
+    for (units) |unit| {
+        const ch = b.addConfigHeader(
+            .{ .style = .{
+                .autoconf_at = dir.join(
+                    b.allocator,
+                    b.fmt("{s}.in", .{unit}),
+                ) catch
+                    @panic("OOM"),
+            } },
+            .{ .EXE_DIR = b.exe_dir },
+        );
+
+        const cmd = b.addSystemCommand(&.{
+            sed,
+            \\s:/\*:; \0:
+            ,
+        });
+        cmd.addFileArg(ch.getOutputFile());
+
+        _ = wc.addCopyFile(cmd.captureStdOut(), unit);
+    }
+
+    b.installDirectory(.{
+        .source_dir = wc.getDirectory(),
+        .install_dir = .{ .prefix = {} },
+        .install_subdir = "etc/systemd",
+    });
 }
 
 fn build_exploit(b: *std.Build, options: anytype) void {

@@ -1,0 +1,38 @@
+; SPDX-FileCopyrightText: 2026 Daniel Sampliner <samplinerD@gmail.com>
+;
+; SPDX-License-Identifier: GPL-2.0-only
+
+[Unit]
+Description=BPF LSM to block ptrace when task has no mm
+
+[Service]
+ExecStart=@EXE_DIR@/ptrace_no_mm
+
+LimitMEMLOCK=infinity
+
+DynamicUser=yes
+
+AmbientCapabilities=CAP_BPF CAP_PERFMON
+CapabilityBoundingSet=CAP_BPF CAP_PERFMON
+
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+PrivateBPF=yes
+PrivateDevices=yes
+PrivateNetwork=yes
+ProcSubset=pid
+ProtectClock=yes
+ProtectControlGroups=yes
+ProtectHome=yes
+ProtectHostname=yes
+ProtectKernelLogs=yes
+ProtectKernelModules=yes
+ProtectKernelTunables=yes
+ProtectProc=invisible
+RestrictAddressFamilies=none
+RestrictNamespaces=yes
+RestrictRealtime=yes
+SystemCallArchitectures=native
+UMask=0077
+
+DevicePolicy=closed
