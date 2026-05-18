@@ -4,26 +4,37 @@
  * SPDX-License-Identifier: GPL-2.0-only
  */
 
+#define _GNU_SOURCE
+
 #include <bpf/libbpf.h>
 #include <signal.h>
 #include <stdarg.h>
 #include <stdio.h>
+#include <string.h>
 #include <unistd.h>
 
 #include "ptrace_no_mm.skel.h"
 
-static volatile sig_atomic_t exiting = 0;
-
-static void handle_signal(int sig) {
-  exiting = 1;
+void signal_handler(int sig) {
+  fprintf(stderr, "%s\n", sigabbrev_np(sig));
 }
 
 int main(void) {
   struct ptrace_no_mm* skel = NULL;
   int err;
 
-  signal(SIGINT, handle_signal);
-  signal(SIGTERM, handle_signal);
+  struct sigaction sa = {.sa_handler = signal_handler, .sa_flags = 0};
+  sigemptyset(&sa.sa_mask);
+
+  if (sigaction(SIGINT, &sa, NULL) != 0) {
+    perror("failed to ignore SIGINT");
+    return 1;
+  }
+
+  if (sigaction(SIGTERM, &sa, NULL) != 0) {
+    perror("failed to ignore SIGTERM");
+    return 1;
+  }
 
   libbpf_set_strict_mode(LIBBPF_STRICT_ALL);
 
