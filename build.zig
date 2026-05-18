@@ -93,7 +93,14 @@ fn build_bpf_program(b: *std.Build, options: anytype) *std.Build.Step.Compile {
                 b.allocator,
                 .{ .other_step = dep.artifact("bpf") },
             ) catch @panic("OOM"),
-        .dynamic => obj.root_module.addSystemIncludePath(.{ .cwd_relative = "/usr/include" }),
+        .dynamic => {
+            if (std.zig.system.NativePaths.detect(b.allocator, &options.target.result)) |np| {
+                for (np.include_dirs.items) |d|
+                    obj.root_module.addSystemIncludePath(.{ .cwd_relative = d });
+            } else |err| {
+                b.getInstallStep().dependOn(&b.addFail(b.fmt("could not detect system native paths: {}", .{err})).step);
+            }
+        },
     }
 
     if (options.install_all)
