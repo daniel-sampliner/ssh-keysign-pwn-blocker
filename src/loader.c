@@ -18,12 +18,6 @@ static void handle_signal(int sig) {
   exiting = 1;
 }
 
-static int libbpf_print_fn(enum libbpf_print_level level,
-                           const char* format,
-                           va_list args) {
-  return vfprintf(stderr, format, args);
-}
-
 int main(void) {
   struct ptrace_no_mm* skel = NULL;
   int err;
@@ -31,7 +25,6 @@ int main(void) {
   signal(SIGINT, handle_signal);
   signal(SIGTERM, handle_signal);
 
-  libbpf_set_print(libbpf_print_fn);
   libbpf_set_strict_mode(LIBBPF_STRICT_ALL);
 
   skel = ptrace_no_mm__open();
