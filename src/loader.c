@@ -59,10 +59,12 @@ int main(void) {
   printf("BPF LSM program attached.\n");
   printf("Blocking ptrace_access_check when child->mm == NULL.\n");
   printf("Press Ctrl-C to exit.\n");
+  fflush(stdout);
 
   pause();
 
   printf("Exiting.\n");
+  fflush(stdout);
 
 cleanup:
   ptrace_no_mm__destroy(skel);
