@@ -37,8 +37,8 @@ pub fn build(b: *std.Build) void {
         .deps = deps,
     };
 
-    const loader = build_loader(b, options);
-    install_systemd(b);
+    const loader = buildLoader(b, options);
+    installSystemd(b);
 
     const run_step = b.step("run", "Run the app");
 
@@ -60,10 +60,10 @@ pub fn build(b: *std.Build) void {
     sudo_run_step.dependOn(&sudo_run_cmd.step);
     sudo_run_cmd.step.dependOn(b.getInstallStep());
 
-    build_exploit(b, options);
+    buildExploit(b, options);
 }
 
-fn build_bpf_program(b: *std.Build, options: anytype) *std.Build.Step.Compile {
+fn buildBpfProgram(b: *std.Build, options: anytype) *std.Build.Step.Compile {
     const target = b.resolveTargetQuery(.{
         .cpu_arch = switch (options.target.result.cpu.arch.endian()) {
             .big => .bpfeb,
@@ -106,7 +106,7 @@ fn build_bpf_program(b: *std.Build, options: anytype) *std.Build.Step.Compile {
     return obj;
 }
 
-fn generate_bpf_skeleton_header(b: *std.Build, bpf_program: *std.Build.Step.Compile, options: anytype) !std.Build.LazyPath {
+fn generateBpfSkeletonHeader(b: *std.Build, bpf_program: *std.Build.Step.Compile, options: anytype) !std.Build.LazyPath {
     const bpftool = b.findProgram(&.{"bpftool"}, &.{}) catch |err| switch (err) {
         error.FileNotFound => {
             b.getInstallStep().dependOn(&b.addFail("bpftool binary not found").step);
@@ -131,9 +131,9 @@ fn generate_bpf_skeleton_header(b: *std.Build, bpf_program: *std.Build.Step.Comp
     return header;
 }
 
-fn build_loader(b: *std.Build, options: anytype) *std.Build.Step.Compile {
-    const bpf = build_bpf_program(b, options);
-    const bpf_skeleton_header = generate_bpf_skeleton_header(b, bpf, options);
+fn buildLoader(b: *std.Build, options: anytype) *std.Build.Step.Compile {
+    const bpf = buildBpfProgram(b, options);
+    const bpf_skeleton_header = generateBpfSkeletonHeader(b, bpf, options);
 
     const exe = b.addExecutable(.{
         .name = "ptrace_no_mm",
@@ -168,7 +168,7 @@ fn build_loader(b: *std.Build, options: anytype) *std.Build.Step.Compile {
     return exe;
 }
 
-fn install_systemd(b: *std.Build) void {
+fn installSystemd(b: *std.Build) void {
     const sed = b.findProgram(&.{"sed"}, &.{}) catch |err| switch (err) {
         error.FileNotFound => {
             b.getInstallStep().dependOn(&b.addFail("sed binary not found").step);
@@ -203,7 +203,7 @@ fn install_systemd(b: *std.Build) void {
     });
 }
 
-fn build_exploit(b: *std.Build, options: anytype) void {
+fn buildExploit(b: *std.Build, options: anytype) void {
     const exe_options = b.addOptions();
     const attempts = b.option(usize, "exploit-attempts", "Number of times to attempt chage exploit") orelse 500;
     const user = b.option([]const u8, "exploit-user", "User to run 'chage --list' against") orelse "root";
