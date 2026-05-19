@@ -38,8 +38,6 @@ pub fn build(b: *std.Build) void {
 }
 
 fn genCapNamesH(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.builtin.OptimizeMode, src: std.Build.LazyPath) std.Build.LazyPath {
-    const cap_names_list_h = genCapNamesListH(b, src);
-
     const exe = b.addExecutable(.{
         .name = "_makenames",
         .root_module = b.createModule(.{
@@ -52,7 +50,11 @@ fn genCapNamesH(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.b
         .root = src,
         .files = &.{"_makenames.c"},
     });
-    exe.root_module.addIncludePath(cap_names_list_h.dirname());
+
+    if (genCapNamesListH(b, src, &exe.step)) |header|
+        exe.root_module.addIncludePath(header.dirname())
+    else |_|
+        _ = {};
 
     const run = b.addRunArtifact(exe);
     const stdout = run.captureStdOut();
@@ -60,10 +62,18 @@ fn genCapNamesH(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.b
     return stdout;
 }
 
-fn genCapNamesListH(b: *std.Build, src: std.Build.LazyPath) std.Build.LazyPath {
-    const sh = findProgram(b, "sh");
-    const grep = findProgram(b, "grep");
-    const sed = findProgram(b, "sed");
+fn genCapNamesListH(b: *std.Build, src: std.Build.LazyPath, asking_step: ?*std.Build.Step) !std.Build.LazyPath {
+    const step = asking_step orelse b.getInstallStep();
+
+    const maybe_sh = findProgram(b, "sh", step);
+    const maybe_grep = findProgram(b, "grep", step);
+    const maybe_sed = findProgram(b, "sed", step);
+
+    errdefer step.dependOn(&b.addFail("failed to generate cap_names.list.h").step);
+
+    const sh = try maybe_sh;
+    const grep = try maybe_grep;
+    const sed = try maybe_sed;
 
     const cmd = b.addSystemCommand(&.{
         sh,
@@ -87,11 +97,12 @@ fn genCapNamesListH(b: *std.Build, src: std.Build.LazyPath) std.Build.LazyPath {
     return stdout;
 }
 
-fn findProgram(b: *std.Build, name: []const u8) []const u8 {
+fn findProgram(b: *std.Build, name: []const u8, asking_step: ?*std.Build.Step) ![]const u8 {
+    const step = asking_step orelse b.getInstallStep();
     return b.findProgram(&.{name}, &.{}) catch |err| switch (err) {
         error.FileNotFound => {
-            b.getInstallStep().dependOn(&b.addFail(b.fmt("could not find binary {s}", .{name})).step);
-            return "";
+            step.dependOn(&b.addFail(b.fmt("{s} binary not found", .{name})).step);
+            return err;
         },
     };
 }
