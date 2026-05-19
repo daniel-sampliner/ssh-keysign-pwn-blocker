@@ -40,6 +40,36 @@ int signal_init(void) {
   return 0;
 }
 
+int acquire_capabilities(void) {
+  cap_t caps = cap_get_proc();
+  const cap_value_t cap_list[2] = {CAP_BPF, CAP_PERFMON};
+  int ret;
+
+  if (caps == NULL) {
+    perror("failed to allocate capability state");
+    return 1;
+  }
+
+  ret = cap_set_flag(caps, CAP_EFFECTIVE, 2, cap_list, CAP_SET);
+  if (ret) {
+    perror("failed to set all capability flags");
+    goto cleanup;
+  }
+
+  ret = cap_set_proc(caps);
+  if (ret) {
+    perror("failed to set capability state");
+    goto cleanup;
+  }
+
+  ret = 0;
+
+cleanup:
+  if (cap_free(caps) != 0)
+    perror("failed to free capability state");
+  return ret;
+}
+
 int drop_capabilities(void) {
   cap_t caps = cap_get_proc();
   int ret;
@@ -72,6 +102,11 @@ cleanup:
 int main(void) {
   if (signal_init())
     return 1;
+
+  if (acquire_capabilities()) {
+    perror("failed to acquire capabilities");
+    return 1;
+  }
 
   libbpf_set_strict_mode(LIBBPF_STRICT_ALL);
 
