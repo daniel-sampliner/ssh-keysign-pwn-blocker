@@ -23,14 +23,6 @@ pub fn build(b: *std.Build) void {
         .root = upstream.path("src"),
         .files = sources,
         .flags = &.{
-            // from upstream makefile
-            "-g",
-            "-std=gnu89",
-            "-Werror",
-            "-Wall",
-            "-Wno-format-overflow",
-
-            // needed for zig
             "-fno-sanitize=undefined", // offsetof macro triggers undefined behavior
         },
     });
