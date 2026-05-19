@@ -90,10 +90,7 @@ fn build_bpf_program(b: *std.Build, options: anytype) *std.Build.Step.Compile {
 
     switch (options.link_mode) {
         .static => if (options.deps.lazy.libbpf) |dep|
-            obj.root_module.include_dirs.append(
-                b.allocator,
-                .{ .other_step = dep.artifact("bpf") },
-            ) catch @panic("OOM"),
+            obj.root_module.addSystemIncludePath(dep.artifact("bpf").getEmittedIncludeTree()),
         .dynamic => {
             if (std.zig.system.NativePaths.detect(b.allocator, &options.target.result)) |np| {
                 for (np.include_dirs.items) |d|
