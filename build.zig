@@ -4,22 +4,20 @@
 
 const std = @import("std");
 
-const fake_path: std.Build.LazyPath = .{ .cwd_relative = "/homeless-shelter" };
-
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{ .preferred_optimize_mode = .ReleaseFast });
 
     const install_all = b.option(bool, "install-all", "Install all build artifacts") orelse false;
     const link_mode = b.option(std.builtin.LinkMode, "link-mode", "Preferred link mode for libraries") orelse .static;
-    const vmlinux_dir: std.Build.LazyPath = b.option(std.Build.LazyPath, "vmlinux-dir", "Directory containining vmlinux.h header") orelse
+    const vmlinux_dir = b.option(std.Build.LazyPath, "vmlinux-dir", "Directory containining vmlinux.h header") orelse
         if (b.lazyDependency("bcc", .{})) |dep|
             dep.path(b.pathJoin(&.{ "libbpf-tools", switch (target.result.cpu.arch) {
                 .x86_64 => "x86",
                 else => |arch| @tagName(arch),
             } }))
         else
-            fake_path;
+            return b.getInstallStep().dependOn(&b.addFail("no vmlinux.h dir provided").step);
 
     const deps = .{
         .lazy = .{
@@ -39,9 +37,7 @@ pub fn build(b: *std.Build) void {
         .deps = deps,
     };
 
-    const bpf = build_bpf_program(b, options);
-    const bpf_skeleton_header = generate_bpf_skeleton_header(b, bpf, options);
-    const loader = build_loader(b, bpf_skeleton_header, options);
+    const loader = build_loader(b, options);
     install_systemd(b);
 
     const run_step = b.step("run", "Run the app");
@@ -54,7 +50,7 @@ pub fn build(b: *std.Build) void {
 
     const sudo = b.findProgram(&.{"sudo"}, &.{}) catch |err| switch (err) {
         error.FileNotFound => {
-            sudo_run_step.dependOn(&b.addFail("sudo binary not found in PATH").step);
+            sudo_run_step.dependOn(&b.addFail("sudo binary not found").step);
             return;
         },
     };
@@ -110,11 +106,11 @@ fn build_bpf_program(b: *std.Build, options: anytype) *std.Build.Step.Compile {
     return obj;
 }
 
-fn generate_bpf_skeleton_header(b: *std.Build, bpf_program: *std.Build.Step.Compile, options: anytype) std.Build.LazyPath {
+fn generate_bpf_skeleton_header(b: *std.Build, bpf_program: *std.Build.Step.Compile, options: anytype) !std.Build.LazyPath {
     const bpftool = b.findProgram(&.{"bpftool"}, &.{}) catch |err| switch (err) {
         error.FileNotFound => {
-            b.getInstallStep().dependOn(&b.addFail("bpftool binary not found in PATH").step);
-            return fake_path;
+            b.getInstallStep().dependOn(&b.addFail("bpftool binary not found").step);
+            return err;
         },
     };
 
@@ -135,7 +131,10 @@ fn generate_bpf_skeleton_header(b: *std.Build, bpf_program: *std.Build.Step.Comp
     return header;
 }
 
-fn build_loader(b: *std.Build, bpf_header: std.Build.LazyPath, options: anytype) *std.Build.Step.Compile {
+fn build_loader(b: *std.Build, options: anytype) *std.Build.Step.Compile {
+    const bpf = build_bpf_program(b, options);
+    const bpf_skeleton_header = generate_bpf_skeleton_header(b, bpf, options);
+
     const exe = b.addExecutable(.{
         .name = "ptrace_no_mm",
         .root_module = b.createModule(.{
@@ -146,8 +145,11 @@ fn build_loader(b: *std.Build, bpf_header: std.Build.LazyPath, options: anytype)
     });
     b.installArtifact(exe);
     exe.root_module.addCSourceFile(.{ .file = b.path("src/loader.c") });
-    bpf_header.addStepDependencies(&exe.step);
-    exe.root_module.addIncludePath(bpf_header.dirname());
+
+    if (bpf_skeleton_header) |lp|
+        exe.root_module.addIncludePath(lp.dirname())
+    else |_|
+        exe.step.dependOn(&b.addFail("failed to generate ptrace_no_mm.skel.h").step);
 
     switch (options.link_mode) {
         .static => {
@@ -169,7 +171,7 @@ fn build_loader(b: *std.Build, bpf_header: std.Build.LazyPath, options: anytype)
 fn install_systemd(b: *std.Build) void {
     const sed = b.findProgram(&.{"sed"}, &.{}) catch |err| switch (err) {
         error.FileNotFound => {
-            b.getInstallStep().dependOn(&b.addFail("sed binary not found in PATH").step);
+            b.getInstallStep().dependOn(&b.addFail("sed binary not found").step);
             return;
         },
     };
@@ -180,13 +182,7 @@ fn install_systemd(b: *std.Build) void {
     const units: []const []const u8 = &.{"ptrace_no_mm.service"};
     for (units) |unit| {
         const ch = b.addConfigHeader(
-            .{ .style = .{
-                .autoconf_at = dir.join(
-                    b.allocator,
-                    b.fmt("{s}.in", .{unit}),
-                ) catch
-                    @panic("OOM"),
-            } },
+            .{ .style = .{ .autoconf_at = dir.path(b, b.fmt("{s}.in", .{unit})) } },
             .{ .EXE_DIR = b.exe_dir },
         );
 
