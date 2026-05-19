@@ -16,25 +16,14 @@
 
 #include "ptrace_no_mm.skel.h"
 
-void signal_handler(int sig) {
-  fprintf(stderr, "%s\n", sigabbrev_np(sig));
-}
+static int signal_block(sigset_t* set) {
+  sigemptyset(set);
+  sigaddset(set, SIGINT);
+  sigaddset(set, SIGTERM);
 
-int signal_init(void) {
-  struct sigaction sa = {.sa_handler = signal_handler, .sa_flags = 0};
-  sigemptyset(&sa.sa_mask);
-  int ret;
-
-  ret = sigaction(SIGINT, &sa, NULL) != 0;
-  if (ret) {
-    perror("failed to ignore SIGINT");
-    return ret;
-  }
-
-  ret = sigaction(SIGTERM, &sa, NULL) != 0;
-  if (ret) {
-    perror("failed to ignore SIGTERM");
-    return ret;
+  if (sigprocmask(SIG_BLOCK, set, NULL)) {
+    perror("failed to block signals");
+    return -1;
   }
 
   return 0;
@@ -100,7 +89,8 @@ cleanup:
 }
 
 int main(void) {
-  if (signal_init())
+  sigset_t signal_set;
+  if (signal_block(&signal_set))
     return 1;
 
   if (acquire_capabilities()) {
@@ -136,7 +126,15 @@ int main(void) {
   printf("Press Ctrl-C to exit.\n");
   fflush(stdout);
 
-  pause();
+  siginfo_t info;
+  int sig = sigwaitinfo(&signal_set, &info);
+  if (sig < 0) {
+    perror("failed to wait for signals");
+    err = 1;
+    goto cleanup;
+  }
+
+  fprintf(stderr, "%s\n", sigabbrev_np(sig));
 
   printf("Exiting.\n");
   fflush(stdout);
