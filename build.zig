@@ -24,6 +24,7 @@ pub fn build(b: *std.Build) void {
     const deps = .{
         .lazy = .{
             .libbpf = b.lazyDependency("libbpf", .{ .target = target, .optimize = optimize }),
+            .libcap = b.lazyDependency("libcap", .{ .target = target, .optimize = optimize }),
         },
     };
 
@@ -152,11 +153,16 @@ fn build_loader(b: *std.Build, bpf_header: std.Build.LazyPath, options: anytype)
     exe.root_module.addIncludePath(bpf_header.dirname());
 
     switch (options.link_mode) {
-        .static => if (options.deps.lazy.libbpf) |dep|
-            exe.root_module.linkLibrary(dep.artifact("bpf")),
+        .static => {
+            if (options.deps.lazy.libbpf) |dep|
+                exe.root_module.linkLibrary(dep.artifact("bpf"));
+            if (options.deps.lazy.libcap) |dep|
+                exe.root_module.linkLibrary(dep.artifact("cap"));
+        },
         .dynamic => {
             const args: std.Build.Module.LinkSystemLibraryOptions = .{ .preferred_link_mode = .dynamic };
             exe.root_module.linkSystemLibrary("libbpf", args);
+            exe.root_module.linkSystemLibrary("libcap", args);
         },
     }
 

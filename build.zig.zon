@@ -12,6 +12,10 @@
             .path = "./thirdparty/libbpf",
             .lazy = true,
         },
+        .libcap = .{
+            .path = "./thirdparty/libcap",
+            .lazy = true,
+        },
         .bcc = .{
             .url = "https://github.com/iovisor/bcc/archive/refs/tags/v0.33.0.tar.gz",
             .hash = "N-V-__8AAHxhfgHUD1q_gse-FXlcc4HXYebeCJZlE64CfaNC",
