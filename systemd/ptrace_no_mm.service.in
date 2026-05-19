@@ -12,8 +12,8 @@ LimitMEMLOCK=infinity
 
 DynamicUser=yes
 
-AmbientCapabilities=CAP_BPF CAP_PERFMON
-CapabilityBoundingSet=CAP_BPF CAP_PERFMON
+AmbientCapabilities=CAP_BPF CAP_PERFMON CAP_SETPCAP
+CapabilityBoundingSet=CAP_BPF CAP_PERFMON CAP_SETPCAP
 
 LockPersonality=yes
 MemoryDenyWriteExecute=yes
